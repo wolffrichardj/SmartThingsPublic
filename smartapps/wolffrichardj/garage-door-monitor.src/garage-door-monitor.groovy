@@ -26,7 +26,7 @@ definition(
 
 preferences {
 	section("When the garage door is open...") {
-		input "multisensor", "capability.contactSensor", title: "Which?"
+		input "contactsensor", "capability.contactSensor", title: "Which?"
 	}
 	section("For too long...") {
 		input "maxOpenTime", "number", title: "Minutes?"
@@ -40,60 +40,32 @@ preferences {
 
 def installed()
 {
-	subscribe(multisensor, "contact", accelerationHandler)
+	log.debug "Installed with settings: ${settings}"
+	subscribe(contactsensor, "contact", contactHandler)
 }
 
 def updated()
 {
 	unsubscribe()
-	subscribe(multisensor, "contact", accelerationHandler)
+	subscribe(contactsensor, "contact", contactHandler)
 }
 
-def accelerationHandler(evt) {
-	def latestThreeAxisState = evt.value // e.g.: 0,0,-1000
-	if (latestThreeAxisState) {
-		def isOpen = evt.value == "open" // TODO: Test that this value works in most cases...
-		def isNotScheduled = state.status != "scheduled"
 
-		if (!isOpen) {
-			clearSmsHistory()
-			clearStatus()
-		}
-
-		if (isOpen && isNotScheduled) {
-			runIn(maxOpenTime * 60, takeAction, [overwrite: false])
-			state.status = "scheduled"
-		}
-
-	}
-	else {
-		log.warn "COULD NOT FIND LATEST 3-AXIS STATE FOR: ${multisensor}"
-	}
+/*************** Helpers ******************/
+def clearSmsHistory() {
+	state.smsHistory = null
 }
 
-def takeAction(){
-	if (state.status == "scheduled")
-	{
-		def deltaMillis = 1000 * 60 * maxOpenTime
-		def timeAgo = new Date(now() - deltaMillis)
-
-		def recentTexts = state.smsHistory.find { it.sentDate.toSystemDate() > timeAgo }
-
-		if (!recentTexts) {
-			sendTextMessage()
-		}
-		runIn(maxOpenTime * 60, takeAction, [overwrite: false])
-	} else {
-		log.trace "Status is no longer scheduled. Not sending text."
-	}
+def clearStatus() {
+	state.status = null
 }
 
 def sendTextMessage() {
-	log.debug "$multisensor was open too long, texting $phone"
+	log.debug "$contactsensor was open too long, texting $phone"
 
 	updateSmsHistory()
 	def openMinutes = maxOpenTime * (state.smsHistory?.size() ?: 1)
-	def msg = "Your ${multisensor.label ?: multisensor.name} has been open for more than ${openMinutes} minutes!"
+	def msg = "Your ${contactsensor.label ?: contactsensor.name} has been open for more than ${openMinutes} minutes!"
     if (location.contactBookEnabled) {
         sendNotificationToContacts(msg, recipients)
     }
@@ -116,10 +88,39 @@ def updateSmsHistory() {
 	state.smsHistory << [sentDate: new Date().toSystemFormat()]
 }
 
-def clearSmsHistory() {
-	state.smsHistory = null
+/*************** Actions ******************/
+def contactHandler(evt) {
+    log.debug "Event triggered with event values: ${evt.value}"
+		def latestState = evt.value
+		if( latestState){
+			def isOpen = (evt.value == "open")
+			def isNotScheduled = state.status != "scheduled"
+
+			if (!isOpen) {
+				clearSmsHistory()
+				clearStatus()
+			}
+
+			if (isOpen && isNotScheduled) {
+				runIn(maxOpenTime * 60, takeAction, [overwrite: false])
+				state.status = "scheduled"
+			}
+		}
 }
 
-def clearStatus() {
-	state.status = null
+def takeAction(){
+	if (state.status == "scheduled")
+	{
+		def deltaMillis = 1000 * 60 * maxOpenTime
+		def timeAgo = new Date(now() - deltaMillis)
+
+		def recentTexts = state.smsHistory.find { it.sentDate.toSystemDate() > timeAgo }
+
+		if (!recentTexts) {
+			sendTextMessage()
+		}
+		runIn(maxOpenTime * 60, takeAction, [overwrite: false])
+	} else {
+		log.trace "Status is no longer scheduled. Not sending text."
+	}
 }
